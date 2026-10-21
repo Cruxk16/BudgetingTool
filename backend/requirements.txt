@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+sqlmodel
+pytest
+httpx
+python-multipart
+pdfplumber
+reportlab

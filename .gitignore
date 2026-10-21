@@ -1,0 +1,9 @@
+.env
+*.db
+*.key
+data/
+certs/
+.venv/
+__pycache__/
+.pytest_cache/
+.DS_Store
