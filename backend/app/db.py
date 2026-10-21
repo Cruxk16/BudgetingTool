@@ -15,6 +15,19 @@ class Account(SQLModel, table=True):
     mask: Optional[str] = None
     type: str = "checking"  # checking | savings | credit
     role: str = "ignore"  # income_bills | spending | savings | ignore
+    plaid_account_id: Optional[str] = Field(default=None, index=True)  # set when linked through Plaid
+    plaid_item_id: Optional[int] = Field(default=None, foreign_key="plaiditem.id")
+
+
+class PlaidItem(SQLModel, table=True):
+    """One bank login linked through Plaid."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    item_id: str = Field(index=True)
+    access_token: str
+    institution: str = ""
+    cursor: Optional[str] = None  # /transactions/sync position
+    error: Optional[str] = None  # e.g. ITEM_LOGIN_REQUIRED until the user reconnects
+    last_synced: Optional[datetime] = None
 
 
 class Transaction(SQLModel, table=True):
@@ -75,6 +88,18 @@ class Setting(SQLModel, table=True):
 
 def init_db() -> None:
     SQLModel.metadata.create_all(engine)
+    _add_missing_columns()
+
+
+def _add_missing_columns() -> None:
+    """create_all doesn't alter existing tables, so add columns introduced after a database was created."""
+    with engine.begin() as conn:
+        for table in SQLModel.metadata.sorted_tables:
+            have = {r[1] for r in conn.exec_driver_sql(f'PRAGMA table_info("{table.name}")')}
+            for col in table.columns:
+                if col.name not in have:
+                    conn.exec_driver_sql(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" '
+                                         f'{col.type.compile(engine.dialect)}')
 
 
 def get_session():

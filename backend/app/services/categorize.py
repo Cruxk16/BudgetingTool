@@ -64,6 +64,9 @@ TRANSFER_RE = re.compile(
     r"internal transfer", re.I)
 
 
+PLAID_TRANSFER_PREFIXES = ("transfer in", "transfer out", "loan payments credit card payment")
+
+
 CARD_PAYMENT_RE = re.compile(
     r"payment thank you|pymt|autopay|auto pay|online pmt|payment received|epayment|mobile payment|card payment|"
     r"credit card pmt|crcardpmt|credit crd", re.I)
@@ -84,8 +87,9 @@ def keyword_category(t: Transaction) -> str:
 def looks_like_transfer(t: Transaction) -> bool:
     if TRANSFER_RE.search(t.name):
         return True
-    # Capital One / Chase label card payments in their own Category column
-    return (t.source_category or "").strip().lower() in ("payment/credit", "payment", "payments")
+    # Capital One / Chase label card payments in their own Category column; Plaid uses its own taxonomy
+    src = (t.source_category or "").strip().lower()
+    return src in ("payment/credit", "payment", "payments") or src.startswith(PLAID_TRANSFER_PREFIXES)
 
 
 def _rule_matches(rule: CategoryRule, t: Transaction) -> bool:

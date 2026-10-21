@@ -263,10 +263,11 @@ const pages = {
   },
 
   async '/settings'() {
-    const [accounts, rules, cats] = await Promise.all([api('/accounts'), api('/rules'), api('/categories')]);
+    const [accounts, rules, cats, plaid] = await Promise.all([api('/accounts'), api('/rules'), api('/categories'), api('/plaid/status')]);
     const roles = { income_bills: 'Income & bills', spending: 'Spending (card)', savings: 'Savings', ignore: 'Ignore' };
     main.innerHTML = `<h1>Settings</h1>
       <div id="preview"></div>
+      ${plaidCard(plaid)}
       <div class="card" style="margin-bottom:16px"><h2>Add an account</h2>
         <p class="muted">Add each account once (e.g. Wells Fargo checking, Chase card, Capital One card), then upload its statements (PDF or CSV) below. Re-uploading overlapping date ranges is safe — duplicates are skipped.</p>
         <div class="row"><input id="ai" placeholder="Bank (e.g. Chase)"><input id="an" placeholder="Account name"><input id="am" placeholder="Last 4" style="width:90px" maxlength="4">
@@ -276,7 +277,7 @@ const pages = {
       ${accounts.map(a => `<div class="card" style="margin-bottom:16px"><div class="row" style="justify-content:space-between"><h2>${esc(a.institution)} — ${esc(a.name)} <span class="muted">${a.mask ? '••' + esc(a.mask) : ''}</span></h2>
         <span><select data-acct="${a.id}">${Object.entries(roles).map(([k, v]) => `<option value="${k}" ${a.role === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
         <button data-disc="${a.id}">Delete</button></span></div>
-        <p class="muted">${a.transaction_count ? `${a.transaction_count} transactions, ${a.first_date} → ${a.last_date}` : 'No transactions yet.'}</p>
+        <p class="muted">${a.plaid_account_id ? 'Linked via Plaid · ' : ''}${a.transaction_count ? `${a.transaction_count} transactions, ${a.first_date} → ${a.last_date}` : 'No transactions yet.'}</p>
         <div class="row"><input type="file" accept=".pdf,.csv,.txt" data-file="${a.id}"><button class="primary" data-up="${a.id}">Upload statement</button></div></div>`).join('')}
       <div class="card"><h2>Category rules</h2><p class="muted">Rules always win over automatic categories. You can also create one from the Transactions page when recategorizing.</p>
         <table>${rules.map(r => `<tr><td>${r.match_type} “${esc(r.pattern)}”</td><td>${esc(r.category)}</td><td class="n"><button class="link" data-delrule="${r.id}">remove</button></td></tr>`).join('')}</table>
@@ -286,6 +287,7 @@ const pages = {
       if (!$('#ai').value || !$('#an').value) return toast('Bank and account name are required');
       await api('/accounts', 'POST', { institution: $('#ai').value, name: $('#an').value, mask: $('#am').value || null, type: $('#at').value }); render();
     };
+    bindPlaid();
     $('#demo').onclick = async () => { if (confirm('Load 12 months of fake data?')) { const r = await api('/demo/seed', 'POST'); toast(`Loaded ${r.transactions} demo transactions`); render(); } };
     main.querySelectorAll('[data-up]').forEach(b => b.onclick = async () => {
       const f = main.querySelector(`input[data-file="${b.dataset.up}"]`).files[0];
@@ -306,6 +308,51 @@ const pages = {
     };
   },
 };
+
+// ---------- Plaid ----------
+function plaidCard(p) {
+  if (!p.configured) return `<div class="card" style="margin-bottom:16px"><h2>Connect banks with Plaid</h2>
+    <p class="muted">Pulls transactions automatically instead of uploading statements. Create a free account at dashboard.plaid.com, then paste your client ID and secret (Developers → Keys). Use <b>sandbox</b> to try it with fake banks (user_good / pass_good). They're stored only in <code>data/plaid.json</code> on this computer.</p>
+    <div class="row"><input id="pcid" placeholder="Client ID"><input id="psec" type="password" placeholder="Secret">
+      <select id="penv"><option value="sandbox">Sandbox</option><option value="production">Production</option></select>
+      <button class="primary" id="psave">Save</button></div></div>`;
+  const when = iso => iso ? new Date(iso).toLocaleString() : 'never';
+  return `<div class="card" style="margin-bottom:16px"><div class="row" style="justify-content:space-between"><h2>Bank connections <span class="muted">Plaid ${esc(p.env)}</span></h2>
+    <span><button class="primary" id="plink">Connect a bank</button> ${p.items.length ? '<button id="psync">Sync now</button>' : ''} <button class="link" id="pforget">change keys</button></span></div>
+    <table>${p.items.map(i => `<tr><td>${esc(i.institution)}</td><td class="muted">${i.error ? `<span style="color:var(--bad, #d6403a)">${esc(i.error)}</span>` : 'synced ' + when(i.last_synced)}</td>
+      <td class="n">${i.error ? `<button data-prelink="${i.id}">Reconnect</button> ` : ''}<button class="link" data-punlink="${i.id}">disconnect</button></td></tr>`).join('') || '<tr><td class="muted">No banks connected yet.</td></tr>'}</table></div>`;
+}
+
+async function openLink(itemId) {
+  if (!window.Plaid) return toast("Plaid Link didn't load. Check your internet connection.");
+  const { link_token } = await api('/plaid/link_token', 'POST', { item_id: itemId || null });
+  Plaid.create({
+    token: link_token,
+    onSuccess: async (public_token, meta) => {
+      if (itemId) { toast('Reconnected, syncing…'); await api('/plaid/sync', 'POST'); return render(); }
+      toast('Linked, pulling transactions…');
+      const r = await api('/plaid/exchange', 'POST', { public_token, institution: meta.institution?.name || '' });
+      toast(`Added ${r.accounts_created} account(s) and ${r.added} transactions`); render();
+    },
+  }).open();
+}
+
+function bindPlaid() {
+  if ($('#psave')) $('#psave').onclick = async () => {
+    if (!$('#pcid').value || !$('#psec').value) return toast('Client ID and secret are required');
+    await api('/plaid/credentials', 'PUT', { client_id: $('#pcid').value, secret: $('#psec').value, env: $('#penv').value }); render();
+  };
+  if ($('#plink')) $('#plink').onclick = () => openLink();
+  if ($('#psync')) $('#psync').onclick = async () => {
+    toast('Syncing…'); const r = await api('/plaid/sync', 'POST');
+    toast(r.errors.length ? `${r.errors[0].institution}: ${r.errors[0].error}` : `${r.added} new, ${r.updated} updated, ${r.removed} removed`); render();
+  };
+  if ($('#pforget')) $('#pforget').onclick = async () => { if (confirm('Forget the saved Plaid keys? Connected banks stay linked.')) { await api('/plaid/credentials', 'PUT', {}); render(); } };
+  main.querySelectorAll('[data-prelink]').forEach(b => b.onclick = () => openLink(+b.dataset.prelink));
+  main.querySelectorAll('[data-punlink]').forEach(b => b.onclick = async () => {
+    if (confirm('Disconnect this bank? Its accounts and transactions are kept; it just stops syncing.')) { await api(`/plaid/items/${b.dataset.punlink}`, 'DELETE'); render(); }
+  });
+}
 
 // ---------- Import preview ----------
 function showPreview(accountId, account, filename, rows) {
