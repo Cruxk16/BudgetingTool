@@ -8,7 +8,7 @@ from .common import merchant_key
 CATEGORIES = [
     "Rent/Housing", "Car Payment", "Car Insurance", "Gas", "Groceries", "Dining",
     "Shopping", "Subscriptions", "Utilities", "Phone/Internet", "Entertainment",
-    "Health", "Travel", "Gifts", "Student Loans", "Renters Insurance", "Other",
+    "Health", "Travel", "Transportation", "Gifts", "Student Loans", "Renters Insurance", "Other",
 ]
 TRANSFER_CATEGORIES = ["Card Payment", "Transfer"]
 DISCRETIONARY = ["Dining", "Shopping", "Entertainment", "Subscriptions", "Travel", "Gifts", "Other"]
@@ -35,6 +35,9 @@ KEYWORDS = [
     ("Dining", ["restaurant", "cafe", "coffee", "starbucks", "chipotle", "mcdonald", "doordash", "uber eats",
                 "ubereats", "grubhub", "pizza", "grill", "kitchen", "taco", "burger", "dunkin", "olive garden",
                 "panera", "subway", "bar & ", "brewery", "diner", "bakery"]),
+    # after Dining so "uber eats" stays a meal
+    ("Transportation", ["lyft", "uber", "parking", "transit", "mta", "nyct", "cats pass", "cats tvms", "toll",
+                        "quick pass", "e-zpass", "ezpass", "amtrak"]),
     ("Health", ["pharmacy", "cvs", "walgreens", "medical", "dental", "dentist", "doctor", "clinic", "hospital",
                 "health", "fitness", "gym", "optical"]),
     ("Travel", ["airline", "airlines", "delta air", "united air", "american air", "southwest", "airbnb", "hotel",
@@ -50,11 +53,13 @@ KEYWORD_RES = [(cat, re.compile(r"(?<![a-z])(?:" + "|".join(re.escape(k) for k i
 
 # Fallback: the category column some banks (Chase, Capital One) include in their CSVs.
 SOURCE_HINTS = [
+    ("rent and utilities rent", "Rent/Housing"), ("student loan", "Student Loans"),  # Plaid detailed categories
     ("grocer", "Groceries"), ("gas", "Gas"), ("automotive", "Gas"), ("food", "Dining"), ("dining", "Dining"),
     ("restaurant", "Dining"), ("shop", "Shopping"), ("merchandise", "Shopping"), ("travel", "Travel"),
     ("airfare", "Travel"), ("lodging", "Travel"), ("entertain", "Entertainment"), ("health", "Health"),
     ("medical", "Health"), ("phone", "Phone/Internet"), ("cable", "Phone/Internet"), ("utilit", "Utilities"),
     ("gift", "Gifts"), ("home", "Shopping"),
+    ("transportation", "Transportation"),  # Plaid; "transportation gas" already matched "gas" above
 ]
 
 # Wording banks use for paying a card from checking, or moving money between own accounts.

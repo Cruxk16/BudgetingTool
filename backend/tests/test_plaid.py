@@ -73,9 +73,11 @@ def test_link_creates_accounts_and_imports(client, fake):
                              txn("t4", -500, "PAYMENT THANK YOU", account="card",
                                  category="LOAN_PAYMENTS_CREDIT_CARD_PAYMENT")],
                    "next_cursor": "c1", "has_more": True},
-                  {"added": [txn("t5", 30, "SHELL OIL", account="card", category="TRANSPORTATION_GAS")]}]
+                  {"added": [txn("t5", 30, "SHELL OIL", account="card", category="TRANSPORTATION_GAS"),
+                             txn("t6", 18, "Lyft", account="card", category="TRANSPORTATION_TAXIS_AND_RIDE_SHARES"),
+                             txn("t7", 25, "UBER EATS", account="card", category="FOOD_AND_DRINK_RESTAURANT")]}]
     r = client.post("/api/plaid/exchange", json={"public_token": "public-sandbox-x", "institution": "Example Bank"}).json()
-    assert r["accounts_created"] == 2 and r["added"] == 4  # loan skipped, pending skipped
+    assert r["accounts_created"] == 2 and r["added"] == 6  # loan skipped, pending skipped
 
     with Session(engine) as s:
         accts = {a.plaid_account_id: a for a in s.exec(select(Account))}
@@ -86,6 +88,7 @@ def test_link_creates_accounts_and_imports(client, fake):
         assert by["ACME CORP PAYROLL"].category == "Income"
         assert by["PAYMENT THANK YOU"].is_transfer and by["PAYMENT THANK YOU"].category == "Card Payment"
         assert by["SHELL OIL"].category == "Gas"
+        assert by["Lyft"].category == "Transportation" and by["UBER EATS"].category == "Dining"
         assert s.exec(select(PlaidItem)).one().cursor == "c-end"
     sync_calls = [b for p, b in fake.calls if p == "/transactions/sync"]
     assert "cursor" not in sync_calls[0] and sync_calls[1]["cursor"] == "c1"
