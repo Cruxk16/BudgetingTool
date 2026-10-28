@@ -1,7 +1,8 @@
-"""Ask questions about your finances in plain English, answered by Gemini.
+"""Ask questions about your finances in plain English, answered by Gemini (API key) or by the Claude Code / Codex
+command-line tools (your subscription login, see cli_ai.py).
 
 The model never sees your database. It gets a handful of read-only tools (budget, spending, transactions...) and
-calls them as needed; only what a tool returns is sent to Google.
+calls them as needed; only what a tool returns is sent to the provider you picked.
 """
 import os
 from datetime import date
@@ -45,18 +46,90 @@ def save_key(key: str | None) -> None:
     KEY_FILE.chmod(0o600)
 
 
-def current_model(session: Session) -> str:
-    return get_setting(session, "gemini_model") or DEFAULT_MODEL
+PROVIDERS = {"gemini": "Gemini (API key)", "claude": "Claude (Claude Code CLI)", "codex": "OpenAI (Codex CLI)",
+             "antigravity": "Gemini (Antigravity CLI)"}
+DEFAULT_PROVIDER = "gemini"
 
 
-def set_model(session: Session, model: str) -> None:
-    set_setting(session, "gemini_model", model.strip() or None)
+def current_provider(session: Session) -> str:
+    p = get_setting(session, "ai_provider")
+    return p if p in PROVIDERS else DEFAULT_PROVIDER
 
 
-def available_models(session: Session) -> dict:
-    """Models this API key can use for chat, falling back to a built-in list if Google can't be reached."""
-    current, key = current_model(session), api_key()
-    ids, live = [], False
+def set_provider(session: Session, provider: str) -> None:
+    if provider not in PROVIDERS:
+        raise AIError(f"Unknown provider {provider!r}", 400)
+    set_setting(session, "ai_provider", provider)
+
+
+def _model_setting(provider: str) -> str:
+    return "gemini_model" if provider == "gemini" else f"{provider}_model"
+
+
+def current_model(session: Session, provider: str | None = None) -> str:
+    provider = provider or current_provider(session)
+    if provider == "gemini":
+        return get_setting(session, "gemini_model") or DEFAULT_MODEL
+    from . import cli_ai
+    return get_setting(session, _model_setting(provider)) or cli_ai.DEFAULT_MODEL[provider]
+
+
+def set_model(session: Session, model: str, provider: str | None = None) -> None:
+    set_setting(session, _model_setting(provider or current_provider(session)), model.strip() or None)
+
+
+GEMINI_EFFORTS = ["low", "medium", "high"]  # Gemini 3 thinking levels; which ones a model accepts is up to Google
+
+
+def effort_levels(provider: str, model: str) -> list[str]:
+    """Effort levels this model accepts besides "default" (none for Antigravity: the level is part of the model id)."""
+    if provider == "gemini":
+        return GEMINI_EFFORTS
+    from . import cli_ai
+    return cli_ai.efforts(provider, model)
+
+
+def current_effort(session: Session, provider: str | None = None, model: str | None = None) -> str:
+    provider = provider or current_provider(session)
+    effort = get_setting(session, f"{provider}_effort") or "default"
+    # a level the newly picked model doesn't offer quietly falls back to its default
+    return effort if effort in effort_levels(provider, model or current_model(session, provider)) else "default"
+
+
+def set_effort(session: Session, effort: str, provider: str | None = None) -> None:
+    provider = provider or current_provider(session)
+    if effort != "default" and effort not in effort_levels(provider, current_model(session, provider)):
+        raise AIError(f"{effort!r} isn't available for {current_model(session, provider)}", 400)
+    set_setting(session, f"{provider}_effort", None if effort == "default" else effort)
+
+
+def providers() -> list[dict]:
+    """Every way to ask, with whether it's ready to use and what's missing if not."""
+    from . import cli_ai
+    key = api_key() is not None
+    out = [{"id": "gemini", "label": PROVIDERS["gemini"], "kind": "api", "available": key,
+            "note": "" if key else "Add a Gemini API key below."}]
+    for p in ("claude", "codex", "antigravity"):
+        found = cli_ai.executable(p) is not None
+        ready = found and (p != "antigravity" or cli_ai.agy_ready())
+        note = "" if ready else cli_ai.INSTALL[p] if not found else cli_ai.AGY_SETUP
+        out.append({"id": p, "label": PROVIDERS[p], "kind": "cli", "available": ready, "note": note})
+    return out
+
+
+def available_models(session: Session, provider: str | None = None) -> dict:
+    """Models the chosen provider offers. Gemini asks Google which ones this key can use (built-in list if unreachable)."""
+    provider = provider or current_provider(session)
+    if provider != "gemini":
+        from . import cli_ai
+        ids, current = list(cli_ai.models(provider)), current_model(session, provider)
+        if current not in ids:
+            ids.insert(0, current)
+        return {"models": ids, "labels": cli_ai.labels(provider), "current": current, "from_google": False,
+                "provider": provider, "efforts": cli_ai.efforts(provider, current),
+                "effort": current_effort(session, provider, current), "default_effort": cli_ai.default_effort(provider, current)}
+    current, key = current_model(session, "gemini"), api_key()
+    ids, names, live = [], {}, False
     if key:
         try:
             token = None
@@ -70,6 +143,7 @@ def available_models(session: Session) -> dict:
                     if ("generateContent" in m.get("supportedGenerationMethods", []) and mid.startswith("gemini")
                             and not any(w in mid for w in SKIP_WORDS)):
                         ids.append(mid)
+                        names[mid] = m.get("displayName") or mid
                 token = data.get("nextPageToken")
                 if not token:
                     break
@@ -80,7 +154,8 @@ def available_models(session: Session) -> dict:
         ids = list(FALLBACK_MODELS)
     if current not in ids:
         ids.insert(0, current)
-    return {"models": sorted(set(ids)), "current": current, "from_google": live}
+    return {"models": sorted(set(ids)), "labels": names, "current": current, "from_google": live, "provider": "gemini",
+            "efforts": GEMINI_EFFORTS, "effort": current_effort(session, "gemini", current), "default_effort": None}
 
 
 def system_prompt() -> str:
@@ -205,15 +280,29 @@ def call_gemini(payload: dict, model: str) -> dict:
 
 
 def ask(session: Session, question: str, history: list[dict]) -> dict:
+    provider = current_provider(session)
+    if provider != "gemini":
+        from . import cli_ai
+        model = current_model(session, provider)
+        effort = current_effort(session, provider, model)
+        return {**cli_ai.ask(provider, system_prompt(), question, history, model, effort), "provider": provider,
+                "effort": effort}
+    return {**_ask_gemini(session, question, history), "provider": "gemini",
+            "effort": current_effort(session, "gemini")}
+
+
+def _ask_gemini(session: Session, question: str, history: list[dict]) -> dict:
     tools = Tools(session)
-    model = current_model(session)
+    model = current_model(session, "gemini")
+    effort = current_effort(session, "gemini", model)
+    extra = {"generationConfig": {"thinkingConfig": {"thinkingLevel": effort}}} if effort != "default" else {}
     contents = [{"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["text"]}]} for m in history]
     contents.append({"role": "user", "parts": [{"text": question}]})
     used: list[str] = []
 
     for _ in range(MAX_ROUNDS):
         resp = call_gemini({"systemInstruction": {"parts": [{"text": system_prompt()}]}, "contents": contents,
-                            "tools": [{"functionDeclarations": DECLS}]}, model)
+                            "tools": [{"functionDeclarations": DECLS}], **extra}, model)
         cands = resp.get("candidates") or []
         if not cands or "content" not in cands[0]:
             reason = (resp.get("promptFeedback") or {}).get("blockReason") or (cands[0].get("finishReason") if cands else "")

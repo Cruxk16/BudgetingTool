@@ -224,22 +224,31 @@ const pages = {
   async '/ask'() {
     const [st, mdl] = await Promise.all([api('/ai/status'), api('/ai/models')]);
     const chat = pages._chat ||= [];
+    const cur = st.providers.find(p => p.id === st.provider);
+    const sendTo = { gemini: "Google's Gemini", claude: 'Anthropic (through Claude Code)', codex: 'OpenAI (through Codex)', antigravity: 'Google (through Antigravity)' }[st.provider];
+    const modelHint = { gemini: mdl.from_google ? 'models available to your key' : 'built-in list — save your key to see the models your key can use',
+      claude: 'aliases like “sonnet” always use the newest version', codex: 'models offered by your Codex install', antigravity: 'models offered by your Antigravity CLI (includes Claude and GPT-OSS)' }[st.provider];
     const suggestions = ['Where did most of my money go this month?', 'How much fun money do I have left, and what\'s my daily limit?',
       'Which categories am I overspending vs my plan?', 'Any subscriptions I should cancel?', 'Can I afford a $1,200 purchase this month?'];
     main.innerHTML = `<h1>Ask AI</h1>
-      ${st.configured ? '' : `<div class="card" style="margin-bottom:16px"><h2>Add your Gemini API key</h2>
+      ${st.configured ? '' : st.provider === 'gemini' ? `<div class="card" style="margin-bottom:16px"><h2>Add your Gemini API key</h2>
         <p class="muted">Get a free key at aistudio.google.com/apikey. It's stored only in <code>data/gemini.key</code> on this computer.</p>
-        <div class="row"><input id="key" type="password" placeholder="Gemini API key" style="width:320px"><button class="primary" id="savekey">Save</button></div></div>`}
-      <div class="row"><label class="muted" for="model">Model</label>
-        <select id="model">${mdl.models.map(m => `<option ${m === mdl.current ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>
-        <span class="muted" style="font-size:12px">${mdl.from_google ? 'models available to your key' : 'built-in list — save your key to see the models your key can use'}</span></div>
-      <p class="muted" style="font-size:13px">Privacy: nothing is sent until you ask. Then only the data needed to answer (e.g. category totals, or matching transactions with their descriptions and amounts) is sent to Google's Gemini.</p>
+        <div class="row"><input id="key" type="password" placeholder="Gemini API key" style="width:320px"><button class="primary" id="savekey">Save</button></div></div>`
+        : `<div class="card" style="margin-bottom:16px"><h2>${esc(cur.label)} isn't set up</h2><p class="muted">${esc(cur.note)}</p></div>`}
+      <div class="row"><label class="muted" for="provider">Provider</label>
+        <select id="provider">${st.providers.map(p => `<option value="${p.id}" ${p.id === st.provider ? 'selected' : ''}>${esc(p.label)}${p.available ? '' : ' — not set up'}</option>`).join('')}</select>
+        <label class="muted" for="model">Model</label>
+        <select id="model">${mdl.models.map(m => `<option value="${esc(m)}" ${m === mdl.current ? 'selected' : ''}>${esc(mdl.labels?.[m] && mdl.labels[m] !== m ? `${mdl.labels[m]} — ${m}` : m)}</option>`).join('')}</select>
+        ${mdl.efforts?.length ? `<label class="muted" for="effort">Effort</label>
+        <select id="effort">${['default', ...mdl.efforts].map(e => `<option value="${e}" ${e === mdl.effort ? 'selected' : ''}>${e === 'default' ? 'default' + (mdl.default_effort ? ` (${mdl.default_effort})` : '') : e}</option>`).join('')}</select>` : ''}
+        <span class="muted" style="font-size:12px">${modelHint}${st.provider === 'antigravity' ? ' · effort is part of the model name' : ''}</span></div>
+      <p class="muted" style="font-size:13px">${cur.kind === 'cli' ? `Uses your ${esc(cur.label.split(' (')[0])} subscription login — no API key. ` : ''}Privacy: nothing is sent until you ask. Then only the data needed to answer (e.g. category totals, or matching transactions with their descriptions and amounts) is sent to ${sendTo}.${st.provider === 'antigravity' ? ' Antigravity can\'t be blocked from searching the web, so it is told not to and any search it makes is flagged under the answer.' : ''}</p>
       <div class="chips">${suggestions.map(q => `<button data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
       <div class="chat" id="chat"></div>
       <div class="row"><input id="q" placeholder="Ask about your spending…" style="flex:1;min-width:240px"><button class="primary" id="send">Ask</button>
         ${chat.length ? '<button id="clear">Clear</button>' : ''}</div>`;
     const draw = () => {
-      $('#chat').innerHTML = chat.map(m => `<div class="msg ${m.role === 'user' ? 'user' : 'ai'}${m.error ? ' err' : ''}">${m.role === 'user' ? esc(m.text) : md(m.text)}${m.tools?.length ? `<span class="tools">Looked at: ${[...new Set(m.tools)].map(t => esc(t.replace(/_/g, ' '))).join(', ')}</span>` : ''}</div>`).join('');
+      $('#chat').innerHTML = chat.map(m => `<div class="msg ${m.role === 'user' ? 'user' : 'ai'}${m.error ? ' err' : ''}">${m.role === 'user' ? esc(m.text) : md(m.text)}${m.tools?.length ? `<span class="tools">Looked at: ${[...new Set(m.tools)].map(t => esc(t.replace(/_/g, ' '))).join(', ')}</span>` : ''}${m.warn?.length ? m.warn.map(w => `<span class="tools" style="color:#d98a00">⚠ ${esc(w)}</span>`).join('') : ''}${m.via ? `<span class="tools">via ${esc(m.via)}</span>` : ''}</div>`).join('');
       window.scrollTo(0, document.body.scrollHeight);
     };
     const ask = async question => {
@@ -249,14 +258,16 @@ const pages = {
       chat.push({ role: 'ai', text: 'Thinking…' }); draw();
       try {
         const r = await api('/ai/ask', 'POST', { question, history });
-        chat[chat.length - 1] = { role: 'ai', text: r.answer, tools: r.tools_used };
+        chat[chat.length - 1] = { role: 'ai', text: r.answer, tools: r.tools_used, warn: r.warnings, via: `${r.provider} · ${r.model}${r.effort && r.effort !== 'default' ? ' · ' + r.effort : ''}` };
       } catch (e) { chat[chat.length - 1] = { role: 'ai', text: '⚠ ' + e.message, error: true }; }
       draw();
     };
     $('#send').onclick = () => ask($('#q').value);
     $('#q').onkeydown = e => { if (e.key === 'Enter') ask($('#q').value); };
     main.querySelectorAll('[data-q]').forEach(b => b.onclick = () => ask(b.dataset.q));
-    $('#model').onchange = async () => { await api('/ai/model', 'PUT', { model: $('#model').value }); toast('Model set to ' + $('#model').value); };
+    $('#provider').onchange = async () => { await api('/ai/provider', 'PUT', { provider: $('#provider').value }); render(); };
+    $('#model').onchange = async () => { await api('/ai/model', 'PUT', { model: $('#model').value, provider: st.provider }); toast('Model set to ' + $('#model').value); render(); };
+    if ($('#effort')) $('#effort').onchange = async () => { await api('/ai/effort', 'PUT', { effort: $('#effort').value, provider: st.provider }); toast('Effort set to ' + $('#effort').value); };
     if ($('#savekey')) $('#savekey').onclick = async () => { await api('/ai/key', 'PUT', { key: $('#key').value }); render(); };
     if ($('#clear')) $('#clear').onclick = () => { chat.length = 0; render(); };
     draw();
