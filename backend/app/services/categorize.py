@@ -98,6 +98,8 @@ def looks_like_transfer(t: Transaction) -> bool:
 
 
 def _rule_matches(rule: CategoryRule, t: Transaction) -> bool:
+    if rule.incoming_only and t.amount >= 0:
+        return False
     pat = rule.pattern.lower()
     if rule.match_type == "merchant":
         return pat in ((t.merchant_name or "").lower(), merchant_key(t.merchant_name, t.name), t.name.lower())

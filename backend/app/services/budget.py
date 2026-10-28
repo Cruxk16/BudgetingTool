@@ -8,8 +8,8 @@ from sqlmodel import Session, select
 
 from ..db import Budget
 from .categorize import DISCRETIONARY
-from .common import (Expense, day_before_month, load_expenses, month_end, month_key,
-                     month_start, prev_months, trailing_start)
+from .common import (EXTRA_INCOME, REIMBURSEMENT, Expense, day_before_month, load_expenses, month_end,
+                     month_inflows, month_key, month_start, prev_months, trailing_start)
 from .income import detect_income
 
 BASELINE = "baseline"  # pseudo-month holding the user's planned budget
@@ -239,7 +239,10 @@ def free_to_spend(session: Session, budget: dict, items: list[dict], unplanned: 
     planned = [i for i in items if i["kind"] != "unbudgeted"]
     committed = sum(max(i["budget"], i["spent"]) for i in planned) + budget["totals"]["sinking"]
     unplanned_spent = round(sum(unplanned.values()), 2)
-    left = round(budget["income"]["monthly"] - committed - unplanned_spent, 2)
+    inflows = month_inflows(session, month_start(month_key(today)), month_end(month_key(today)))
+    reimbursed = min(inflows[REIMBURSEMENT], unplanned_spent)  # paybacks for planned lines change nothing: those are held back anyway
+    extra = inflows[EXTRA_INCOME]
+    left = round(budget["income"]["monthly"] + extra - committed - (unplanned_spent - reimbursed), 2)
     days_left = dim - today.day + 1
 
     # What history says you usually spend outside the plan, per month.
@@ -256,6 +259,7 @@ def free_to_spend(session: Session, budget: dict, items: list[dict], unplanned: 
     return {
         "left": left, "per_day": round(max(left, 0) / days_left, 2), "days_left": days_left,
         "committed": round(committed, 2), "unplanned_spent": unplanned_spent,
+        "reimbursed": round(reimbursed, 2), "extra_income": extra,
         "typical_total": typical_total, "typical_months": len(months),
         "planned_surplus": budget["totals"]["surplus"],
         "categories": [{"category": c, "this_month": unplanned.get(c, 0), "typical": typical.get(c)} for c in cats],

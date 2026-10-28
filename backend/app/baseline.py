@@ -28,7 +28,8 @@ def load(session: Session, path: Path | None = None) -> int:
         exists = session.exec(select(CategoryRule).where(CategoryRule.pattern == pattern)).first()
         if not exists:
             session.add(CategoryRule(match_type=r.get("match_type", "contains"), pattern=pattern,
-                                     category=r["category"], is_transfer=r.get("is_transfer", False)))
+                                     category=r["category"], is_transfer=r.get("is_transfer", False),
+                                     incoming_only=r.get("incoming_only", False)))
     session.commit()
     categorize.apply_all(session)
     return len(lines)

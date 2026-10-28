@@ -25,6 +25,7 @@ class RuleBody(BaseModel):
     pattern: str
     category: str = "Other"
     is_transfer: bool = False
+    incoming_only: bool = False
 
 
 class IncomeBody(BaseModel):
@@ -67,6 +68,7 @@ def patch_txn(txn_id: int, body: TxnPatch, session: Session = Depends(get_sessio
         raise HTTPException(404)
     if body.category is not None:
         t.category = body.category
+        t.is_transfer = body.category in categorize.TRANSFER_CATEGORIES  # re-filing out of Transfer un-flags it
     if body.is_transfer is not None:
         t.is_transfer = body.is_transfer
     if body.notes is not None:

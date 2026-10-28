@@ -52,7 +52,7 @@ const pages = {
         <div class="stats">
           <div class="stat"><div class="v ${f.left < 0 ? 'bad' : 'good'}">${money(f.left)}</div><div class="l">after bills still to come and what you've spent</div></div>
           <div class="stat"><div class="v">${f.left > 0 ? money(f.per_day) : '$0'}</div><div class="l">per day for the next ${f.days_left} days</div></div>
-          <div class="stat"><div class="v">${money(f.unplanned_spent)}</div><div class="l">already spent outside the plan</div></div>
+          <div class="stat"><div class="v">${money(f.unplanned_spent)}</div><div class="l">already spent outside the plan${f.reimbursed ? ` (${money(f.reimbursed)} paid back)` : ''}${f.extra_income ? ` · +${money(f.extra_income)} extra income` : ''}</div></div>
           <div class="stat"><div class="v">${f.typical_months ? money(f.typical_total) : '—'}</div><div class="l">you usually spend outside the plan${f.typical_months ? ` (${f.typical_months}-mo avg)` : ''}</div></div>
         </div>
         ${f.categories.length ? `<table><tr><th>Category</th><th class="n">This month</th><th class="n">Usual / month</th></tr>${f.categories.map(c =>
@@ -81,7 +81,7 @@ const pages = {
     main.innerHTML = `<h1>Transactions</h1>
       <div class="row">
         <input id="q" placeholder="Search merchant…">
-        <select id="cat"><option value="">All categories</option>${[...cats, 'Card Payment', 'Transfer', 'Income'].map(c => `<option>${esc(c)}</option>`).join('')}</select>
+        <select id="cat"><option value="">All categories</option>${[...cats, 'Card Payment', 'Transfer', 'Income', 'Reimbursement', 'Extra Income'].map(c => `<option>${esc(c)}</option>`).join('')}</select>
         <select id="acct"><option value="0">All accounts</option>${accounts.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select>
         <select id="range"><option value="">Any date</option><option value="this">This month</option><option value="last">Last month</option><option value="3">Last 3 months</option><option value="custom">Custom…</option></select>
         <input id="d1" type="date" title="From"><input id="d2" type="date" title="To">
@@ -291,9 +291,9 @@ const pages = {
         <p class="muted">${a.plaid_account_id ? 'Linked via Plaid · ' : ''}${a.transaction_count ? `${a.transaction_count} transactions, ${a.first_date} → ${a.last_date}` : 'No transactions yet.'}</p>
         <div class="row"><input type="file" accept=".pdf,.csv,.txt" data-file="${a.id}"><button class="primary" data-up="${a.id}">Upload statement</button></div></div>`).join('')}
       <div class="card"><h2>Category rules</h2><p class="muted">Rules always win over automatic categories. You can also create one from the Transactions page when recategorizing.</p>
-        <table>${rules.map(r => `<tr><td>${r.match_type} “${esc(r.pattern)}”</td><td>${esc(r.category)}</td><td class="n"><button class="link" data-delrule="${r.id}">remove</button></td></tr>`).join('')}</table>
+        <table>${rules.map(r => `<tr><td>${r.match_type} “${esc(r.pattern)}”${r.incoming_only ? ' <span class="muted">(incoming only)</span>' : ''}</td><td>${esc(r.category)}</td><td class="n"><button class="link" data-delrule="${r.id}">remove</button></td></tr>`).join('')}</table>
         <div class="row" style="margin-top:10px"><select id="rt"><option value="merchant">merchant is</option><option value="contains">name contains</option></select>
-          <input id="rp" placeholder="e.g. shell"><select id="rc">${[...cats, 'Card Payment', 'Transfer'].map(c => `<option>${esc(c)}</option>`).join('')}</select><button id="radd">Add rule</button></div></div>`;
+          <input id="rp" placeholder="e.g. shell"><select id="rc">${[...cats, 'Reimbursement', 'Extra Income', 'Card Payment', 'Transfer'].map(c => `<option>${esc(c)}</option>`).join('')}</select><label class="muted"><input type="checkbox" id="ri"> incoming only</label><button id="radd">Add rule</button></div></div>`;
     $('#aadd').onclick = async () => {
       if (!$('#ai').value || !$('#an').value) return toast('Bank and account name are required');
       await api('/accounts', 'POST', { institution: $('#ai').value, name: $('#an').value, mask: $('#am').value || null, type: $('#at').value }); render();
@@ -315,7 +315,7 @@ const pages = {
     main.querySelectorAll('[data-delrule]').forEach(b => b.onclick = async () => { await api(`/rules/${b.dataset.delrule}`, 'DELETE'); render(); });
     $('#radd').onclick = async () => {
       if (!$('#rp').value) return; const c = $('#rc').value;
-      await api('/rules', 'POST', { match_type: $('#rt').value, pattern: $('#rp').value, category: c, is_transfer: c === 'Transfer' || c === 'Card Payment' }); render();
+      await api('/rules', 'POST', { match_type: $('#rt').value, pattern: $('#rp').value, category: c, is_transfer: c === 'Transfer' || c === 'Card Payment', incoming_only: $('#ri').checked }); render();
     };
   },
 };
@@ -403,7 +403,7 @@ function txnTable(rows, compact, cats = []) {
   return `<table><tr><th>Date</th><th>Merchant</th>${compact ? '' : '<th>Account</th>'}<th>Category</th><th class="n">Amount</th></tr>${rows.map(t => `<tr>
     <td class="muted">${t.date}</td><td>${esc(t.merchant_name || t.name)}</td>
     ${compact ? '' : `<td class="muted">${esc(t.account)} ••${esc(t.mask || '')}</td>`}
-    <td>${compact ? esc(t.category) : `<select data-id="${t.id}">${[...cats, 'Income', 'Card Payment', 'Transfer'].map(c => `<option ${c === t.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}<option value="__transfer">Mark as account transfer</option></select>`}</td>
+    <td>${compact ? esc(t.category) : `<select data-id="${t.id}">${[...cats, 'Income', 'Reimbursement', 'Extra Income', 'Card Payment', 'Transfer'].map(c => `<option ${c === t.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}<option value="__transfer">Mark as account transfer</option></select>`}</td>
     <td class="n ${t.is_transfer ? 'muted' : t.amount < 0 ? 'good' : ''}">${money(-t.amount, 2)}</td></tr>`).join('')}</table>`;
 }
 function goalCard(g) {

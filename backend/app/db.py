@@ -51,6 +51,7 @@ class CategoryRule(SQLModel, table=True):
     pattern: str
     category: str = "Other"
     is_transfer: bool = False
+    incoming_only: bool = False  # only deposits match, so money you send the same person is left alone
 
 
 class Budget(SQLModel, table=True):

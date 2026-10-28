@@ -9,6 +9,9 @@ from sqlmodel import Session, select
 from ..db import Account, Transaction
 
 SPEND_ROLES = ("income_bills", "spending")
+REIMBURSEMENT = "Reimbursement"  # money back from friends: offsets this month's spending outside the plan
+EXTRA_INCOME = "Extra Income"  # one-off deposits (a sale): added to this month's allowance only
+INFLOW_CATEGORIES = (REIMBURSEMENT, EXTRA_INCOME)
 
 
 def month_key(d: date) -> str:
@@ -72,10 +75,10 @@ def load_expenses(
         q = q.where(Transaction.date <= end)
     out = []
     for t, a in session.exec(q):
-        if a.role not in SPEND_ROLES or t.is_transfer or t.amount == 0:
+        if a.role not in SPEND_ROLES or t.is_transfer or t.amount == 0 or t.category in INFLOW_CATEGORIES:
             continue
-        if a.role == "income_bills" and t.amount < 0:
-            continue  # a deposit, not a refund
+        if a.role == "income_bills" and t.amount < 0 and t.category == "Income":
+            continue  # a paycheck, not a refund; a deposit filed under a spending category (loan help) nets against it
         label = f"{a.name} ••{a.mask}" if a.mask else a.name
         out.append(Expense(
             t.id, t.date, month_key(t.date), t.amount, t.category,
@@ -91,3 +94,15 @@ def trailing_start(today: date, months: int) -> date:
 
 def day_before_month(today: date) -> date:
     return today.replace(day=1) - timedelta(days=1)
+
+
+def month_inflows(session: Session, start: date, end: date) -> dict[str, float]:
+    """Reimbursements and extra income deposited in the range."""
+    out = {REIMBURSEMENT: 0.0, EXTRA_INCOME: 0.0}
+    q = select(Transaction, Account).where(
+        Transaction.account_id == Account.id, Transaction.amount < 0,
+        Transaction.date >= start, Transaction.date <= end, Transaction.category.in_(INFLOW_CATEGORIES))
+    for t, a in session.exec(q):
+        if a.role in SPEND_ROLES and not t.is_transfer:
+            out[t.category] += -t.amount
+    return {k: round(v, 2) for k, v in out.items()}

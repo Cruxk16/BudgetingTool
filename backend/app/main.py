@@ -3,7 +3,7 @@ import os
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import APIRouter, Depends, FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
 
@@ -49,6 +49,20 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="MoneyTool", lifespan=lifespan)
+
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "testserver"}
+
+
+@app.middleware("http")
+async def local_only(request, call_next):
+    """The API has no login, so only answer pages served from this machine: a wrong Host header means DNS
+    rebinding, and a foreign Origin on a write means another website is driving the browser."""
+    if request.headers.get("host", "").rsplit(":", 1)[0] not in LOCAL_HOSTS:
+        return PlainTextResponse("Forbidden host", status_code=403)
+    origin = request.headers.get("origin")
+    if request.method not in ("GET", "HEAD", "OPTIONS") and origin and origin.split("//")[-1].rsplit(":", 1)[0] not in LOCAL_HOSTS:
+        return PlainTextResponse("Forbidden origin", status_code=403)
+    return await call_next(request)
 for r in (accounts.router, ai.router, data.router, budget.router, goals.router, plaid_routes.router, demo_router):
     app.include_router(r)
 
